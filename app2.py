@@ -18,40 +18,14 @@ def call_openai_api(prompt, api_key, max_tokens=4000):
                 "model": "gpt-4o",
                 "messages": [
                     {
-                        "role": "system",
-                        "content": """You are a linguistic expert helping with an educational assessment tool. 
-Your job is to identify ROOT FORMS (lemmas) and generate MORPHOLOGICAL VARIATIONS for vocabulary words.
-
-CRITICAL CONTEXT:
-- This is for a marking correction tool that evaluates student responses
-- Students use vocabulary from a provided list in their writing
-- Students might use different forms of the same word (e.g., "analyze" vs "analyzing")
-- We don't want to penalize students for using valid variations
-- We NEVER want to reward students for using synonyms (those are different words)
-
-YOUR TASK:
-1. Identify the ROOT/LEMMA (dictionary form) of each word or phrase
-2. Generate ALL morphological variations (inflections only)
-3. Treat multi-word expressions like "watch out for" as SINGLE LEXICAL UNITS
-4. Generate variations of the ENTIRE phrase (e.g., "watching out for", "watched out for")
-
-STRICT RULES:
-✅ DO: Provide morphological variations (same root, different form)
-✅ DO: Treat phrasal verbs as single units
-✅ DO: Include all verb tenses, noun plurals, adjective forms
-❌ DON'T: Provide synonyms (e.g., "observe" for "watch")
-❌ DON'T: Provide antonyms
-❌ DON'T: Provide related words that aren't morphological variations
-❌ DON'T: Break up multi-word expressions"""
-                    },
-                    {
                         "role": "user",
                         "content": prompt
                     }
                 ],
                 "max_tokens": max_tokens,
                 "temperature": 0.3
-            }
+            },
+            timeout=60  # Add timeout
         )
         
         if response.status_code == 200:
@@ -60,9 +34,15 @@ STRICT RULES:
         else:
             error_data = response.json()
             st.error(f"API Error {response.status_code}: {error_data.get('error', {}).get('message', 'Unknown error')}")
+            st.error(f"Full error response: {error_data}")
             return None
+    except requests.exceptions.Timeout:
+        st.error("Request timed out. Please try again.")
+        return None
     except Exception as e:
         st.error(f"Error calling OpenAI API: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def generate_lemmatization_prompt(words_list):
@@ -170,16 +150,28 @@ def process_vocabulary_batch(words_list, api_key, prompt_generator_func, batch_s
         
         # Generate prompt using the provided function
         prompt = prompt_generator_func(batch)
+        
+        # Debug: Show first batch prompt
+        if batch_num == 1:
+            with st.expander("🔍 Debug: View first batch prompt"):
+                st.code(prompt[:500] + "..." if len(prompt) > 500 else prompt)
+        
         response = call_openai_api(prompt, api_key, max_tokens=4000)
         
         if response:
+            # Debug: Show first batch response
+            if batch_num == 1:
+                with st.expander("🔍 Debug: View first batch response"):
+                    st.code(response[:500] + "..." if len(response) > 500 else response)
+            
             parsed_data = parse_gpt_response(response)
             if parsed_data:
                 results.extend(parsed_data)
+                st.success(f"✅ Batch {batch_num} processed: {len(parsed_data)} items")
             else:
                 st.warning(f"⚠️ Batch {batch_num} failed to parse. Skipping...")
         else:
-            st.warning(f"⚠️ Batch {batch_num} failed. Skipping...")
+            st.warning(f"⚠️ Batch {batch_num} failed. No response from API.")
         
         # Update progress
         progress = min((i + batch_size) / len(words_list), 1.0)
@@ -187,6 +179,8 @@ def process_vocabulary_batch(words_list, api_key, prompt_generator_func, batch_s
     
     progress_bar.empty()
     status_text.empty()
+    
+    st.info(f"Total results collected: {len(results)} items")
     
     return results
 
